@@ -3,14 +3,14 @@
 # found in the LICENSE file.
 
 from __future__ import absolute_import
+
 import errno
 import json
 import socket
 import sys
+
 import six
-
 import six.moves.http_client  # pylint: disable=import-error,wrong-import-order
-
 from telemetry.core import exceptions
 
 
@@ -31,7 +31,8 @@ class DevToolsHttp():
   the instance is garbage collected.
   """
 
-  def __init__(self, devtools_port):
+  def __init__(self, devtools_port, devtools_host='127.0.0.1'):
+    self._devtools_host = devtools_host
     self._devtools_port = devtools_port
     self._conn = None
 
@@ -42,9 +43,9 @@ class DevToolsHttp():
     """Attempts to establish a connection to Chrome devtools."""
     assert not self._conn
     try:
-      host_port = '127.0.0.1:%i' % self._devtools_port
+      host_port = '%s:%i' % (self._devtools_host, self._devtools_port)
       self._conn = six.moves.http_client.HTTPConnection(
-          host_port, timeout=timeout)
+        host_port, timeout=timeout)
     except (socket.error, six.moves.http_client.HTTPException) as e:
       six.reraise(DevToolsClientConnectionError,
                   DevToolsClientConnectionError(repr(e)),
