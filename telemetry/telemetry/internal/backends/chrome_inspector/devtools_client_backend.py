@@ -3,6 +3,7 @@
 # found in the LICENSE file.
 
 from __future__ import absolute_import
+
 import logging
 import re
 import socket
@@ -10,7 +11,6 @@ import socket
 from py_utils import exc_util
 from py_utils import retry_util
 from telemetry.core import exceptions
-from telemetry import decorators
 from telemetry.internal.backends import browser_backend
 from telemetry.internal.backends.chrome_inspector import devtools_http
 from telemetry.internal.backends.chrome_inspector import inspector_backend
@@ -22,6 +22,8 @@ from telemetry.internal.backends.chrome_inspector import tracing_backend
 from telemetry.internal.backends.chrome_inspector import window_manager_backend
 from telemetry.internal.platform.tracing_agent import (
     chrome_tracing_devtools_manager)
+
+from telemetry import decorators
 
 
 class TabNotFoundError(exceptions.Error):
@@ -45,16 +47,17 @@ _FIRST_CALL_TIMEOUT = 60
 # These are possible exceptions raised when the DevTools agent is not ready
 # to accept incomming connections.
 _DEVTOOLS_CONNECTION_ERRORS = (
-    devtools_http.DevToolsClientConnectionError,
-    inspector_websocket.WebSocketException,
-    socket.error)
+  devtools_http.DevToolsClientConnectionError,
+  inspector_websocket.WebSocketException,
+  socket.error)
 
 
 def GetDevToolsBackEndIfReady(devtools_port,
                               app_backend,
                               browser_target=None,
-                              enable_tracing=True):
-  client = _DevToolsClientBackend(app_backend)
+                              enable_tracing=True,
+                              devtools_host='127.0.0.1'):
+  client = _DevToolsClientBackend(app_backend, devtools_host)
   try:
     client.Connect(devtools_port, browser_target, enable_tracing)
     logging.info('DevTools agent ready at %s', client)
@@ -67,13 +70,15 @@ def GetDevToolsBackEndIfReady(devtools_port,
 class BrowserTargetNotFoundException(Exception):
   pass
 
+
 class _DevToolsClientBackend():
   """An object that communicates with Chrome's devtools.
 
   This class owns a map of InspectorBackends. It is responsible for creating
   and destroying them.
   """
-  def __init__(self, app_backend):
+
+  def __init__(self, app_backend, devtools_host='127.0.0.1', devtools_port=None):
     """Create an object able to connect with the DevTools agent.
 
     Args:
@@ -95,6 +100,11 @@ class _DevToolsClientBackend():
     self._system_info_backend = None
     self._wm_backend = None
     self._devtools_context_map_backend = _DevToolsContextMapBackend(self)
+
+    # Remote host and port scenario.
+    self._devtools_host = devtools_host
+    if devtools_port is not None:
+      self._local_port = self._remote_port = devtools_port
 
   def __str__(self):
     s = self.browser_target_url
@@ -119,7 +129,7 @@ class _DevToolsClientBackend():
       if 'webSocketDebuggerUrl' in resp:
         return resp['webSocketDebuggerUrl']
       raise BrowserTargetNotFoundException('Could not get the browser target.')
-    return 'ws://127.0.0.1:%i%s' % (self._local_port, self._browser_target)
+    return 'ws://%s:%i%s' % (self._devtools_host, self._local_port, self._browser_target)
 
   @property
   def app_backend(self):
@@ -157,8 +167,8 @@ class _DevToolsClientBackend():
 
   def _SetUpPortForwarding(self, devtools_port):
     self._forwarder = self.platform_backend.forwarder_factory.Create(
-        local_port=None,  # Forwarder will choose an available port.
-        remote_port=devtools_port, reverse=True)
+      local_port=None,  # Forwarder will choose an available port.
+      remote_port=devtools_port, reverse=True)
     self._local_port = self._forwarder._local_port
     self._remote_port = self._forwarder._remote_port
     self._devtools_http = devtools_http.DevToolsHttp(self.local_port)
@@ -187,7 +197,7 @@ class _DevToolsClientBackend():
     major_number = self.GetChromeMajorNumber()
     if major_number < MIN_SUPPORTED_MAJOR_NUMBER:
       raise UnsupportedVersionError(
-          'Chrome major number %d is no longer supported' % major_number)
+        'Chrome major number %d is no longer supported' % major_number)
 
     # Ensure that the inspector websocket is ready. This may raise a
     # inspector_websocket.WebSocketException or socket.error if not ready.
@@ -201,10 +211,10 @@ class _DevToolsClientBackend():
     # this config to initialize itself correctly.
     if enable_tracing:
       trace_config = (
-          self.platform_backend.tracing_controller_backend \
-              .GetChromeTraceConfig())
+        self.platform_backend.tracing_controller_backend \
+          .GetChromeTraceConfig())
       self._tracing_backend = tracing_backend.TracingBackend(
-          self._browser_websocket, trace_config)
+        self._browser_websocket, trace_config)
 
   @exc_util.BestEffort
   def Close(self):
@@ -243,7 +253,7 @@ class _DevToolsClientBackend():
   def CloseBrowser(self):
     """Close the browser instance."""
     request = {
-        'method': 'Browser.close',
+      'method': 'Browser.close',
     }
     self._browser_websocket.SyncRequest(request, timeout=60)
 
@@ -272,8 +282,8 @@ class _DevToolsClientBackend():
                                        resp['Browser'])
       if not major_number_match and 'User-Agent' in resp:
         major_number_match = re.search(
-            r'Chrome/(\d+)\.\d+\.\d+\.\d+ (Mobile )?Safari',
-            resp['User-Agent'])
+          r'Chrome/(\d+)\.\d+\.\d+\.\d+ (Mobile )?Safari',
+          resp['User-Agent'])
 
       if major_number_match:
         major_number = int(major_number_match.group(1))
@@ -300,11 +310,11 @@ class _DevToolsClientBackend():
       }
     """
     request = {
-        'method': 'Target.createTarget',
-        'params': {
-            'url': url if url else 'about:blank',
-            'newWindow': in_new_window
-        }
+      'method': 'Target.createTarget',
+      'params': {
+        'url': url if url else 'about:blank',
+        'newWindow': in_new_window
+      }
     }
     return self._browser_websocket.SyncRequest(request, timeout)
 
@@ -317,10 +327,10 @@ class _DevToolsClientBackend():
     """
     try:
       return self._devtools_http.Request(
-          'close/%s' % tab_id, timeout=timeout)
+        'close/%s' % tab_id, timeout=timeout)
     except devtools_http.DevToolsClientUrlError as e:
       raise TabNotFoundError(
-          'Unable to close tab, tab id not found: %s' % tab_id) from e
+        'Unable to close tab, tab id not found: %s' % tab_id) from e
 
   def ActivateTab(self, tab_id, timeout):
     """Activates the tab with the given id.
@@ -331,10 +341,10 @@ class _DevToolsClientBackend():
     """
     try:
       return self._devtools_http.Request(
-          'activate/%s' % tab_id, timeout=timeout)
+        'activate/%s' % tab_id, timeout=timeout)
     except devtools_http.DevToolsClientUrlError as e:
       raise TabNotFoundError(
-          'Unable to activate tab, tab id not found: %s' % tab_id) from e
+        'Unable to activate tab, tab id not found: %s' % tab_id) from e
 
   def GetUrl(self, tab_id):
     """Returns the URL of the tab with |tab_id|, as reported by devtools.
@@ -365,24 +375,24 @@ class _DevToolsClientBackend():
   def _CreateWindowManagerBackendIfNeeded(self):
     if not self._wm_backend:
       self._wm_backend = window_manager_backend.WindowManagerBackend(
-          self._browser_websocket)
+        self._browser_websocket)
 
   def _CreateMemoryBackendIfNeeded(self):
     assert self.supports_overriding_memory_pressure_notifications
     if not self._memory_backend:
       self._memory_backend = memory_backend.MemoryBackend(
-          self._browser_websocket)
+        self._browser_websocket)
 
   def _CreateNativeProfilingBackendIfNeeded(self):
     if not self._native_profiling_backend:
       self._native_profiling_backend = (
-          native_profiling_backend.NativeProfilingBackend(
-              self._browser_websocket))
+        native_profiling_backend.NativeProfilingBackend(
+          self._browser_websocket))
 
   def _CreateSystemInfoBackendIfNeeded(self):
     if not self._system_info_backend:
       self._system_info_backend = system_info_backend.SystemInfoBackend(
-          self.browser_target_url)
+        self.browser_target_url)
 
   def StartChromeTracing(self, trace_config, transfer_mode=None, timeout=20):
     """
@@ -397,7 +407,7 @@ class _DevToolsClientBackend():
 
     assert trace_config and trace_config.enable_chrome_trace
     return self._tracing_backend.StartTracing(
-        trace_config.chrome_trace_config, transfer_mode, timeout)
+      trace_config.chrome_trace_config, transfer_mode, timeout)
 
   def RecordChromeClockSyncMarker(self, sync_id):
     assert self.is_tracing_running, 'Tracing must be running to clock sync.'
@@ -474,9 +484,9 @@ class _DevToolsClientBackend():
       return None
 
     return self._tracing_backend.DumpMemory(
-        timeout=timeout,
-        detail_level=detail_level,
-        deterministic=deterministic)
+      timeout=timeout,
+      detail_level=detail_level,
+      deterministic=deterministic)
 
   def SetMemoryPressureNotificationsSuppressed(self, suppressed, timeout=30):
     """Enable/disable suppressing memory pressure notifications.
@@ -494,7 +504,7 @@ class _DevToolsClientBackend():
     """
     self._CreateMemoryBackendIfNeeded()
     return self._memory_backend.SetMemoryPressureNotificationsSuppressed(
-        suppressed, timeout)
+      suppressed, timeout)
 
   def SimulateMemoryPressureNotification(self, pressure_level, timeout=30):
     """Simulate a memory pressure notification.
@@ -513,7 +523,7 @@ class _DevToolsClientBackend():
     """
     self._CreateMemoryBackendIfNeeded()
     return self._memory_backend.SimulateMemoryPressureNotification(
-        pressure_level, timeout)
+      pressure_level, timeout)
 
   def DumpProfilingDataOfAllProcesses(self, timeout):
     """Causes all profiling data of all Chrome processes to be dumped to disk.
@@ -522,7 +532,7 @@ class _DevToolsClientBackend():
     """
     self._CreateNativeProfilingBackendIfNeeded()
     return self._native_profiling_backend.DumpProfilingDataOfAllProcesses(
-        timeout)
+      timeout)
 
   @property
   def window_manager_backend(self):
@@ -535,39 +545,39 @@ class _DevToolsClientBackend():
 
   def ExecuteBrowserCommand(self, command_id, timeout):
     request = {
-        'method': 'Browser.executeBrowserCommand',
-        'params': {
-            'commandId': command_id,
-        }
+      'method': 'Browser.executeBrowserCommand',
+      'params': {
+        'commandId': command_id,
+      }
     }
     self._browser_websocket.SyncRequest(request, timeout)
 
   def SetDownloadBehavior(self, behavior, downloadPath, timeout):
     request = {
-        'method': 'Browser.setDownloadBehavior',
-        'params': {
-            'behavior': behavior,
-            'downloadPath': downloadPath,
-        }
+      'method': 'Browser.setDownloadBehavior',
+      'params': {
+        'behavior': behavior,
+        'downloadPath': downloadPath,
+      }
     }
     self._browser_websocket.SyncRequest(request, timeout)
 
   def GetWindowForTarget(self, target_id):
     request = {
-        'method': 'Browser.getWindowForTarget',
-        'params': {
-            'targetId': target_id
-        }
+      'method': 'Browser.getWindowForTarget',
+      'params': {
+        'targetId': target_id
+      }
     }
     return self._browser_websocket.SyncRequest(request, timeout=30)
 
   def SetWindowBounds(self, window_id, bounds):
     request = {
-        'method': 'Browser.setWindowBounds',
-        'params': {
-            'windowId': window_id,
-            'bounds': bounds
-        }
+      'method': 'Browser.setWindowBounds',
+      'params': {
+        'windowId': window_id,
+        'bounds': bounds
+      }
     }
     self._browser_websocket.SyncRequest(request, timeout=30)
 
@@ -602,7 +612,7 @@ class _DevToolsContextMapBackend():
     for context in self._contexts:
       if context['id'] == context_id:
         new_backend = inspector_backend.InspectorBackend(
-            self._devtools_client, context)
+          self._devtools_client, context)
         self._inspector_backends_dict[context_id] = new_backend
         return new_backend
 

@@ -81,6 +81,9 @@ class BrowserFinderOptions(argparse.Namespace):
     self.extra_atrace_categories = ''
     self.legacy_json_trace_format = False
     self.enable_systrace = False
+    # Параметры для подключения к удалённому DevTools
+    self.remote_debug_host = None  # из --remote-debug-host
+    self.remote_debug_port = None  # из --remote-debug-port
 
   def __repr__(self):
     return str(sorted(self.__dict__.items()))
@@ -107,6 +110,11 @@ class BrowserFinderOptions(argparse.Namespace):
 
     # Selection group
     group = parser.add_argument_group('Which browser to use')
+    group.add_argument('--remote-debug-host',
+                       help='Host for remote Chrome connection through DevTools.')
+    group.add_argument('--remote-debug-port',
+                       type=int,
+                       help='Port for remote Chrome connection through DevTools.')
     # b/355218109 --browser=builder search for the Chrome binary where the
     # Chrome binary it can find in the out/ folder. Traditionally, the browser
     # type would've been release or debug, which would've mapped directly to
